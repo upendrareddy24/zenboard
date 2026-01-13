@@ -105,11 +105,13 @@ function setupEventListeners() {
             stage.container().style.cursor = 'default';
             stage.draggable(false);
         }
+
         // Miro-style: Delete key to remove selected items
-        if (e.key === 'Delete' || e.key === 'Backspace') {
+        // CRITICAL FIX: Don't delete objects if the user is typing in a textarea!
+        if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'TEXTAREA') {
             const nodes = transformer.nodes();
             nodes.forEach(node => {
-                const id = node.id();
+                const id = getObjectId(node);
                 if (id) {
                     socket.emit('delete_object', { id });
                     deleteObject(id);
@@ -130,7 +132,7 @@ function setupEventListeners() {
         // Handle selection and erasing
         if (e.target !== stage) {
             if (currentTool === 'eraser') {
-                const id = e.target.id() || e.target.parent().id();
+                const id = getObjectId(e.target);
                 if (id) {
                     socket.emit('delete_object', { id });
                     deleteObject(id);
@@ -632,13 +634,30 @@ function hexToRGBA(hex, alpha) {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function deleteObject(id) {
-    const node = stage.findOne('#' + id);
-    if (node) {
-        node.destroy();
-        transformer.nodes([]);
-        layer.batchDraw();
+function getObjectId(node) {
+    if (!node) return null;
+    // Check if it's a text label for a shape
+    if (node.id() && node.id().startsWith('text-')) {
+        return node.id().replace('text-', '');
     }
+    // Check if it's part of a group (Sticky Note)
+    if (node.parent() && node.parent() instanceof Konva.Group && node.parent().id()) {
+        return node.parent().id();
+    }
+    return node.id();
+}
+
+function deleteObject(id) {
+    // 1. Delete the main node (Shape or Group)
+    const node = stage.findOne('#' + id);
+    if (node) node.destroy();
+
+    // 2. Delete the associated text label if it exists (for Rects/Circles)
+    const label = stage.findOne('#text-' + id);
+    if (label) label.destroy();
+
+    transformer.nodes([]);
+    layer.batchDraw();
 }
 window.addEventListener('resize', () => {
     stage.width(window.innerWidth);
