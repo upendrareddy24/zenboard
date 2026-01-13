@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+.env
+launcher.py
+find_node.py
+node_path.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.idea/
+.vscode/
