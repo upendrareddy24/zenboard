@@ -27,6 +27,26 @@
 
         <div style="margin-top: 20px;">
             <label
+                style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 1px;">Current
+                Design Name</label>
+            <input type="text" id="design-name" value="Untitled Design"
+                style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: white; padding: 8px; border-radius: 8px; margin-top: 6px; outline: none;">
+            <button id="save-btn"
+                style="width: 100%; margin-top: 10px; padding: 10px; background: var(--accent-color); border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s;">Save
+                Design</button>
+        </div>
+
+        <div style="margin-top: 30px;">
+            <label
+                style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 1px;">Design
+                Library</label>
+            <div id="design-library" style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                <!-- Saved designs will appear here -->
+            </div>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <label
                 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 1px;">Canvas
                 Scale</label>
             <div id="zoom-level" style="font-weight: bold; margin-top: 4px;">100%</div>
@@ -39,11 +59,23 @@
 
     <div id="canvas-container"></div>
 
+    <div class="color-palette" id="color-palette">
+        <div class="color-swatch active" style="background: #6366f1;" data-color="#6366f1"></div>
+        <div class="color-swatch" style="background: #f43f5e;" data-color="#f43f5e"></div>
+        <div class="color-swatch" style="background: #10b981;" data-color="#10b981"></div>
+        <div class="color-swatch" style="background: #f59e0b;" data-color="#f59e0b"></div>
+        <div class="color-swatch" style="background: #0ea5e9;" data-color="#0ea5e9"></div>
+        <div class="color-swatch" style="background: #ffffff;" data-color="#ffffff"></div>
+    </div>
+
     <div class="toolbar">
-        <button class="tool-btn" data-tool="select" title="Select (V)">
+        <button class="tool-btn active" data-tool="select" title="Select (V)">
             <i data-lucide="mouse-pointer-2"></i>
         </button>
-        <button class="tool-btn active" data-tool="pen" title="Pen (P)">
+        <button class="tool-btn" data-tool="eraser" title="Eraser (E)">
+            <i data-lucide="eraser"></i>
+        </button>
+        <button class="tool-btn" data-tool="pen" title="Pen (P)">
             <i data-lucide="pen-tool"></i>
         </button>
         <button class="tool-btn" data-tool="rect" title="Rectangle (R)">

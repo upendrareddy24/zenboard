@@ -6,6 +6,8 @@ let currentTool = 'pen';
 let isDrawing = false;
 let lastLine;
 let lastShape;
+let transformer;
+let currentColor = '#6366f1';
 let stage, layer;
 let userId = Math.random().toString(36).substring(7);
 let userColor = `hsl(${Math.random() * 360}, 70%, 60%)`;
@@ -21,6 +23,16 @@ function init() {
 
     layer = new Konva.Layer();
     stage.add(layer);
+
+    // Add Transformer for selection
+    transformer = new Konva.Transformer({
+        rotateEnabled: true,
+        anchorFill: '#6366f1',
+        anchorStroke: '#fff',
+        borderStroke: '#6366f1',
+        padding: 5
+    });
+    layer.add(transformer);
 
     setupEventListeners();
     setupSocketListeners();
@@ -40,6 +52,40 @@ function setupEventListeners() {
         });
     });
 
+    // Color Swatch Selection
+    document.querySelectorAll('.color-swatch').forEach(swatch => {
+        swatch.addEventListener('click', () => {
+            document.querySelector('.color-swatch.active').classList.remove('active');
+            swatch.classList.add('active');
+            currentColor = swatch.getAttribute('data-color');
+
+            // If an object is selected, re-color it!
+            const nodes = transformer.nodes();
+            if (nodes.length > 0) {
+                nodes.forEach(node => {
+                    const id = node.id();
+                    if (node instanceof Konva.Line) {
+                        node.stroke(currentColor);
+                    } else if (node instanceof Konva.Rect || node instanceof Konva.Circle) {
+                        node.stroke(currentColor);
+                        const fillBase = node.fill() || 'rgba(0,0,0,0)';
+                        if (fillBase !== 'rgba(0,0,0,0)') {
+                            node.fill(hexToRGBA(currentColor, 0.2));
+                        }
+                    }
+                    socket.emit('update_style', { id, color: currentColor });
+                });
+                layer.batchDraw();
+            }
+        });
+    });
+
+    // Save Design Event
+    document.getElementById('save-btn').addEventListener('click', () => {
+        const name = document.getElementById('design-name').value;
+        socket.emit('create_board', { name });
+    });
+
     // Panning (Spacebar logic)
     let isPanning = false;
     window.addEventListener('keydown', (e) => {
@@ -57,14 +103,33 @@ function setupEventListeners() {
 
     // Draw Event Listeners
     stage.on('mousedown touchstart', (e) => {
-        if (stage.draggable() || currentTool === 'select') return;
+        // Handle selection and erasing
+        if (e.target !== stage) {
+            if (currentTool === 'eraser') {
+                const id = e.target.id() || e.target.parent().id();
+                if (id) {
+                    socket.emit('delete_object', { id });
+                    deleteObject(id);
+                }
+                return;
+            }
+            if (currentTool === 'select') {
+                const node = e.target.parent() instanceof Konva.Group ? e.target.parent() : e.target;
+                transformer.nodes([node]);
+                return;
+            }
+        } else {
+            transformer.nodes([]); // Clear selection if clicking stage
+        }
+
+        if (stage.draggable() || currentTool === 'select' || currentTool === 'eraser') return;
 
         isDrawing = true;
         const pos = stage.getRelativePointerPosition();
 
         if (currentTool === 'pen') {
             lastLine = new Konva.Line({
-                stroke: '#6366f1',
+                stroke: currentColor,
                 strokeWidth: 3,
                 globalCompositeOperation: 'source-over',
                 lineCap: 'round',
@@ -79,8 +144,8 @@ function setupEventListeners() {
                 y: pos.y,
                 width: 0,
                 height: 0,
-                fill: 'rgba(99, 102, 241, 0.2)',
-                stroke: '#6366f1',
+                fill: hexToRGBA(currentColor, 0.2),
+                stroke: currentColor,
                 strokeWidth: 2,
                 cornerRadius: 8
             });
@@ -90,8 +155,8 @@ function setupEventListeners() {
                 x: pos.x,
                 y: pos.y,
                 radius: 0,
-                fill: 'rgba(236, 72, 153, 0.2)',
-                stroke: '#ec4899',
+                fill: hexToRGBA(currentColor, 0.2),
+                stroke: currentColor,
                 strokeWidth: 2
             });
             layer.add(lastShape);
@@ -131,13 +196,30 @@ function setupEventListeners() {
     stage.on('mouseup touchend', () => {
         if (isDrawing) {
             isDrawing = false;
-            // Sync new object to others
+            const objId = Math.random().toString(36).substring(7);
+
             if (currentTool === 'pen') {
+                lastLine.id(objId);
                 socket.emit('draw_line', {
+                    id: objId,
                     points: lastLine.points(),
                     stroke: lastLine.stroke(),
                     userId
                 });
+            } else if (lastShape) {
+                lastShape.id(objId);
+                socket.emit('new_shape', {
+                    id: objId,
+                    type: lastShape.className,
+                    x: lastShape.x(),
+                    y: lastShape.y(),
+                    width: lastShape.width(),
+                    height: lastShape.height(),
+                    radius: lastShape.radius ? lastShape.radius() : 0,
+                    fill: lastShape.fill(),
+                    stroke: lastShape.stroke()
+                });
+                lastShape = null;
             }
         }
     });
@@ -170,6 +252,37 @@ function handleZoom() {
 }
 
 function setupSocketListeners() {
+    socket.on('init_state', (elements) => {
+        layer.destroyChildren(); // Clear current view
+        layer.add(transformer); // Always keep transformer
+        elements.forEach(el => {
+            if (el.type === 'line') {
+                layer.add(new Konva.Line(el));
+            } else if (el.type === 'shape') {
+                if (el.className === 'Rect') layer.add(new Konva.Rect(el));
+                else if (el.className === 'Circle') layer.add(new Konva.Circle(el));
+            } else if (el.type === 'sticky') {
+                createSticky(el.x, el.y, el.text, true);
+            }
+        });
+        layer.batchDraw();
+    });
+
+    socket.on('board_list', (boards) => {
+        const list = document.getElementById('design-library');
+        list.innerHTML = '';
+        boards.forEach(board => {
+            const btn = document.createElement('div');
+            btn.className = 'board-item';
+            btn.innerHTML = `<span style="font-size: 14px;">📄 ${board.name}</span>`;
+            btn.style.cssText = 'padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; cursor: pointer; transition: all 0.2s;';
+            btn.onclick = () => socket.emit('join_board', board.id);
+            btn.onmouseover = () => btn.style.background = 'rgba(255,255,255,0.1)';
+            btn.onmouseout = () => btn.style.background = 'rgba(255,255,255,0.05)';
+            list.appendChild(btn);
+        });
+    });
+
     socket.on('draw_line', (data) => {
         if (data.userId === userId) return;
         const line = new Konva.Line({
@@ -182,40 +295,168 @@ function setupSocketListeners() {
         layer.batchDraw();
     });
 
+    socket.on('new_shape', (data) => {
+        let shape;
+        if (data.type === 'Rect') {
+            shape = new Konva.Rect(data);
+        } else if (data.type === 'Circle') {
+            shape = new Konva.Circle(data);
+        }
+        if (shape) {
+            layer.add(shape);
+            layer.batchDraw();
+        }
+    });
+
+    socket.on('delete_object', (data) => {
+        deleteObject(data.id);
+    });
+
+    socket.on('new_object', (data) => {
+        if (data.type === 'sticky') {
+            createSticky(data.x, data.y, data.text, true); // true to skip emission
+        }
+    });
+
+    socket.on('update_style', (data) => {
+        const node = stage.findOne('#' + data.id);
+        if (node) {
+            if (node instanceof Konva.Line) {
+                node.stroke(data.color);
+            } else {
+                node.stroke(data.color);
+                const currentFill = node.fill();
+                if (currentFill && currentFill !== 'rgba(0,0,0,0)') {
+                    node.fill(hexToRGBA(data.color, 0.2));
+                }
+            }
+            layer.batchDraw();
+        }
+    });
+
+    socket.on('update_text', (data) => {
+        const group = stage.findOne('#' + data.id);
+        if (group) {
+            const txt = group.findOne('Text');
+            if (txt) {
+                txt.text(data.text);
+                layer.batchDraw();
+            }
+        }
+    });
+
     socket.on('mouse_move', (data) => {
         if (data.userId === userId) return;
         updateRemoteCursor(data);
     });
 }
 
-function createSticky(x, y, text = 'Idea...') {
-    const group = new Konva.Group({ x, y, draggable: true });
+function createSticky(x, y, text = 'Type requirements...', skipEmit = false) {
+    const id = Math.random().toString(36).substring(7);
+    const group = new Konva.Group({ x, y, draggable: true, id: id });
+
     const rect = new Konva.Rect({
-        width: 120,
-        height: 120,
+        width: 150,
+        height: 150,
         fill: '#facc15',
         shadowBlur: 10,
         shadowOpacity: 0.2,
-        cornerRadius: 4
+        cornerRadius: 4,
+        id: 'rect-' + id
     });
+
     const txt = new Konva.Text({
         text: text,
-        fontSize: 14,
-        padding: 10,
-        width: 120,
-        height: 120,
-        align: 'center',
-        verticalAlign: 'middle',
-        fontFamily: 'Inter'
+        fontSize: 16,
+        padding: 15,
+        width: 150,
+        height: 150,
+        align: 'left',
+        verticalAlign: 'top',
+        fontFamily: 'Inter',
+        id: 'text-' + id
     });
+
     group.add(rect, txt);
     layer.add(group);
     layer.batchDraw();
 
-    socket.emit('new_object', {
-        type: 'sticky',
-        x, y, text,
-        userId
+    // Double click to edit text
+    txt.on('dblclick dbltap', () => {
+        makeTextEditable(txt, group);
+    });
+
+    if (!skipEmit) {
+        socket.emit('new_object', {
+            type: 'sticky',
+            id: id,
+            x, y, text,
+            userId
+        });
+    }
+}
+
+function makeTextEditable(textNode, group) {
+    // Hide text node while editing
+    textNode.hide();
+    transformer.nodes([]); // Clear transformer
+    layer.draw();
+
+    // Create textarea over the canvas
+    const stageBox = stage.container().getBoundingClientRect();
+    const areaPosition = {
+        x: stageBox.left + group.x() * stage.scaleX() + stage.x(),
+        y: stageBox.top + group.y() * stage.scaleY() + stage.y()
+    };
+
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+
+    textarea.value = textNode.text();
+    textarea.style.position = 'absolute';
+    textarea.style.top = areaPosition.y + 'px';
+    textarea.style.left = areaPosition.x + 'px';
+    textarea.style.width = textNode.width() * stage.scaleX() + 'px';
+    textarea.style.height = textNode.height() * stage.scaleY() + 'px';
+    textarea.style.fontSize = textNode.fontSize() * stage.scaleX() + 'px';
+    textarea.style.border = 'none';
+    textarea.style.padding = '15px';
+    textarea.style.margin = '0px';
+    textarea.style.overflow = 'hidden';
+    textarea.style.background = 'transparent';
+    textarea.style.outline = 'none';
+    textarea.style.resize = 'none';
+    textarea.style.lineHeight = textNode.lineHeight();
+    textarea.style.fontFamily = textNode.fontFamily();
+    textarea.style.transformOrigin = 'left top';
+    textarea.style.color = '#000';
+
+    textarea.focus();
+
+    function removeTextarea() {
+        textNode.text(textarea.value);
+        textNode.show();
+        document.body.removeChild(textarea);
+        layer.draw();
+
+        // Sync the text change
+        socket.emit('update_text', {
+            id: group.id(),
+            text: textarea.value
+        });
+    }
+
+    textarea.addEventListener('keydown', (e) => {
+        if (e.keyCode === 13 && !e.shiftKey) {
+            removeTextarea();
+        }
+        if (e.keyCode === 27) {
+            removeTextarea();
+        }
+    });
+
+    textarea.addEventListener('blur', () => {
+        removeTextarea();
     });
 }
 
@@ -236,7 +477,21 @@ function updateRemoteCursor(data) {
     cursor.style.transform = `translate(${data.x}px, ${data.y}px)`;
 }
 
-// Window Resize Handling
+function hexToRGBA(hex, alpha) {
+    let r = parseInt(hex.slice(1, 3), 16),
+        g = parseInt(hex.slice(3, 5), 16),
+        b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function deleteObject(id) {
+    const node = stage.findOne('#' + id);
+    if (node) {
+        node.destroy();
+        transformer.nodes([]);
+        layer.batchDraw();
+    }
+}
 window.addEventListener('resize', () => {
     stage.width(window.innerWidth);
     stage.height(window.innerHeight);
