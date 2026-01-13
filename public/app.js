@@ -2,7 +2,7 @@
 const socket = io(); // Connect to local/heroku server
 
 // State Management
-let currentTool = 'pen';
+let currentTool = 'select'; // Matches index.html default
 let isDrawing = false;
 let lastLine;
 let lastShape;
@@ -45,9 +45,15 @@ function setupEventListeners() {
         btn.addEventListener('click', (e) => {
             const tool = btn.getAttribute('data-tool');
             if (tool) {
-                document.querySelector('.tool-btn.active').classList.remove('active');
+                const activeBtn = document.querySelector('.tool-btn.active');
+                if (activeBtn) activeBtn.classList.remove('active');
                 btn.classList.add('active');
                 currentTool = tool;
+
+                // Update cursor
+                stage.container().style.cursor = (tool === 'select') ? 'default' : 'crosshair';
+                // Clear selection when switching tools
+                if (tool !== 'select') transformer.nodes([]);
             }
         });
     });
@@ -113,9 +119,12 @@ function setupEventListeners() {
                 }
                 return;
             }
-            if (currentTool === 'select') {
+            if (currentTool === 'select' || currentTool === 'text') {
                 const node = e.target.parent() instanceof Konva.Group ? e.target.parent() : e.target;
-                transformer.nodes([node]);
+                if (currentTool === 'select') {
+                    transformer.nodes([node]);
+                }
+                // If clicking an object, don't fall through to create a new one!
                 return;
             }
         } else {
@@ -314,7 +323,7 @@ function setupSocketListeners() {
 
     socket.on('new_object', (data) => {
         if (data.type === 'sticky') {
-            createSticky(data.x, data.y, data.text, true); // true to skip emission
+            createSticky(data.x, data.y, data.text, true, data.id); // Pass the server-side ID
         }
     });
 
@@ -351,8 +360,8 @@ function setupSocketListeners() {
     });
 }
 
-function createSticky(x, y, text = 'Type requirements...', skipEmit = false) {
-    const id = Math.random().toString(36).substring(7);
+function createSticky(x, y, text = 'Type requirements...', skipEmit = false, existingId = null) {
+    const id = existingId || Math.random().toString(36).substring(7);
     const group = new Konva.Group({ x, y, draggable: true, id: id });
 
     const rect = new Konva.Rect({
