@@ -11,6 +11,7 @@ let currentColor = '#6366f1';
 let stage, layer;
 let userId = Math.random().toString(36).substring(7);
 let userColor = `hsl(${Math.random() * 360}, 70%, 60%)`;
+let undoStack = [];
 
 // Initialize Canvas
 function init() {
@@ -92,6 +93,14 @@ function setupEventListeners() {
         socket.emit('create_board', { name });
     });
 
+    // New Board Event
+    document.getElementById('new-board-btn').addEventListener('click', () => {
+        if (confirm('Start a fresh whiteboard? (Your current work is auto-saved in the library)')) {
+            const name = prompt('Enter a name for your new board:', 'New Sprint Design');
+            if (name) socket.emit('create_board', { name });
+        }
+    });
+
     // Panning (Spacebar logic)
     let isPanning = false;
     window.addEventListener('keydown', (e) => {
@@ -106,17 +115,26 @@ function setupEventListeners() {
             stage.draggable(false);
         }
 
+        // Miro-style: Undo (Ctrl + Z)
+        if (e.ctrlKey && e.key === 'z') {
+            e.preventDefault();
+            handleUndo();
+        }
+
         // Miro-style: Delete key to remove selected items
-        // CRITICAL FIX: Don't delete objects if the user is typing in a textarea!
         if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'TEXTAREA') {
             const nodes = transformer.nodes();
-            nodes.forEach(node => {
-                const id = getObjectId(node);
-                if (id) {
-                    socket.emit('delete_object', { id });
-                    deleteObject(id);
-                }
-            });
+            if (nodes.length > 0) {
+                nodes.forEach(node => {
+                    const id = getObjectId(node);
+                    if (id) {
+                        pushToUndo('delete', node.toJSON());
+                        socket.emit('delete_object', { id });
+                        deleteObject(id);
+                    }
+                });
+                updateDeleteButton();
+            }
         }
     });
 
@@ -133,7 +151,11 @@ function setupEventListeners() {
         if (e.target !== stage) {
             if (currentTool === 'eraser') {
                 const id = getObjectId(e.target);
-                if (id) {
+                // IF it's a line, we can do "partial" deletion by finding the specific stroke
+                if (e.target instanceof Konva.Line && e.target.id() === id) {
+                    socket.emit('delete_object', { id });
+                    deleteObject(id);
+                } else if (id) {
                     socket.emit('delete_object', { id });
                     deleteObject(id);
                 }
@@ -233,6 +255,7 @@ function setupEventListeners() {
 
             if (currentTool === 'pen') {
                 lastLine.id(objId);
+                pushToUndo('create', lastLine.toJSON());
                 socket.emit('draw_line', {
                     id: objId,
                     points: lastLine.points(),
@@ -241,6 +264,7 @@ function setupEventListeners() {
                 });
             } else if (lastShape) {
                 lastShape.id(objId);
+                pushToUndo('create', lastShape.toJSON());
                 socket.emit('new_shape', {
                     id: objId,
                     type: lastShape.className,
@@ -287,6 +311,8 @@ function setupEventListeners() {
     // Sync scaling for Sticky Notes and Shapes
     transformer.on('transform', (e) => {
         const node = transformer.nodes()[0];
+        if (!node) return;
+
         if (node instanceof Konva.Group) {
             const rect = node.findOne('Rect');
             const txt = node.findOne('Text');
@@ -302,48 +328,15 @@ function setupEventListeners() {
             node.scaleY(1);
         }
 
-        const id = node.id();
-        socket.emit('update_transform', {
-            id: id,
-            x: node.x(),
-            y: node.y(),
-            scaleX: node.scaleX(),
-            scaleY: node.scaleY(),
-            width: node.width ? node.width() : 0,
-            height: node.height ? node.height() : 0,
-            rotation: node.rotation()
-        });
+        syncTransform(node);
     });
 
-    stage.on('mouseup touchend', () => {
-        if (isDrawing) {
-            isDrawing = false;
-            const objId = Math.random().toString(36).substring(7);
-
-            if (currentTool === 'pen') {
-                lastLine.id(objId);
-                socket.emit('draw_line', {
-                    id: objId,
-                    points: lastLine.points(),
-                    stroke: lastLine.stroke(),
-                    userId
-                });
-            } else if (lastShape) {
-                lastShape.id(objId);
-                socket.emit('new_shape', {
-                    id: objId,
-                    type: lastShape.className,
-                    x: lastShape.x(),
-                    y: lastShape.y(),
-                    width: lastShape.width(),
-                    height: lastShape.height(),
-                    radius: lastShape.radius ? lastShape.radius() : 0,
-                    fill: lastShape.fill(),
-                    stroke: lastShape.stroke()
-                });
-                lastShape = null;
-            }
-        }
+    // Add a floating delete button to the transformer
+    transformer.on('transformstart dragstart click mousedown', () => {
+        updateDeleteButton();
+    });
+    stage.on('click tap', (e) => {
+        if (e.target === stage) updateDeleteButton();
     });
 }
 
@@ -390,17 +383,36 @@ function setupSocketListeners() {
         layer.batchDraw();
     });
 
+    socket.on('board_created', (data) => {
+        socket.emit('join_board', data.id);
+        // Update current design name input
+        const nameInput = document.getElementById('design-name');
+        const board = allBoardsList.find(b => b.id === data.id);
+        if (board) nameInput.value = board.name;
+    });
+
+    let allBoardsList = [];
     socket.on('board_list', (boards) => {
+        allBoardsList = boards;
         const list = document.getElementById('design-library');
         list.innerHTML = '';
         boards.forEach(board => {
             const btn = document.createElement('div');
             btn.className = 'board-item';
             btn.innerHTML = `<span style="font-size: 14px;">📄 ${board.name}</span>`;
-            btn.style.cssText = 'padding: 8px; background: rgba(255,255,255,0.05); border-radius: 6px; cursor: pointer; transition: all 0.2s;';
-            btn.onclick = () => socket.emit('join_board', board.id);
-            btn.onmouseover = () => btn.style.background = 'rgba(255,255,255,0.1)';
-            btn.onmouseout = () => btn.style.background = 'rgba(255,255,255,0.05)';
+
+            // Miro-style active board styling
+            const isActive = document.getElementById('design-name').value === board.name;
+            btn.style.cssText = `padding: 10px; background: ${isActive ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.05)'}; border: 1px solid ${isActive ? 'var(--accent-color)' : 'transparent'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;`;
+
+            btn.onclick = () => {
+                socket.emit('join_board', board.id);
+                document.getElementById('design-name').value = board.name;
+                // Re-render list to update active state
+                socket.emit('request_board_list');
+            };
+            btn.onmouseover = () => { if (!isActive) btn.style.background = 'rgba(255,255,255,0.1)'; };
+            btn.onmouseout = () => { if (!isActive) btn.style.background = 'rgba(255,255,255,0.05)'; };
             list.appendChild(btn);
         });
     });
@@ -522,6 +534,7 @@ function createSticky(x, y, text = 'Type requirements...', skipEmit = false, exi
     });
 
     if (!skipEmit) {
+        pushToUndo('create', group.toJSON());
         socket.emit('new_object', {
             type: 'sticky',
             id: id,
@@ -675,3 +688,85 @@ window.addEventListener('resize', () => {
 });
 
 init();
+
+// --- Undo/Redo & Sync Utilities ---
+
+function pushToUndo(type, data) {
+    undoStack.push({ type, data });
+    if (undoStack.length > 50) undoStack.shift(); // Limit history
+}
+
+function handleUndo() {
+    const action = undoStack.pop();
+    if (!action) return;
+
+    if (action.type === 'create') {
+        const id = action.data.attrs ? action.data.attrs.id : action.data;
+        socket.emit('delete_object', { id });
+        deleteObject(id);
+    } else if (action.type === 'delete') {
+        // Re-create the deleted object
+        const nodeData = JSON.parse(action.data);
+        const node = Konva.Node.create(nodeData);
+        layer.add(node);
+        layer.batchDraw();
+
+        // Re-emit creation
+        if (node instanceof Konva.Line) {
+            socket.emit('draw_line', { ...node.attrs, userId });
+        } else if (node instanceof Konva.Rect || node instanceof Konva.Circle) {
+            socket.emit('new_shape', { ...node.attrs, type: node.className });
+        } else if (node instanceof Konva.Group) {
+            const txt = node.findOne('Text');
+            socket.emit('new_object', { type: 'sticky', ...node.attrs, text: txt.text() });
+        }
+    }
+}
+
+function syncTransform(node) {
+    const id = node.id();
+    socket.emit('update_transform', {
+        id: id,
+        x: node.x(),
+        y: node.y(),
+        scaleX: node.scaleX(),
+        scaleY: node.scaleY(),
+        width: node.width ? node.width() : 0,
+        height: node.height ? node.height() : 0,
+        rotation: node.rotation()
+    });
+}
+
+function updateDeleteButton() {
+    const nodes = transformer.nodes();
+    let delBtn = document.getElementById('floating-delete');
+
+    if (nodes.length === 0) {
+        if (delBtn) delBtn.style.display = 'none';
+        return;
+    }
+
+    if (!delBtn) {
+        delBtn = document.createElement('div');
+        delBtn.id = 'floating-delete';
+        delBtn.innerHTML = '🗑️';
+        delBtn.style.cssText = 'position: absolute; background: white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.3); z-index: 10001; font-size: 16px; transition: transform 0.1s;';
+        delBtn.onmouseover = () => delBtn.style.transform = 'scale(1.1)';
+        delBtn.onmouseout = () => delBtn.style.transform = 'scale(1)';
+        delBtn.onclick = () => {
+            nodes.forEach(node => {
+                const id = getObjectId(node);
+                pushToUndo('delete', node.toJSON());
+                socket.emit('delete_object', { id });
+                deleteObject(id);
+            });
+            delBtn.style.display = 'none';
+        };
+        document.body.appendChild(delBtn);
+    }
+
+    const box = transformer.getClientRect();
+    delBtn.style.display = 'flex';
+    delBtn.style.left = (box.x + box.width / 2 - 14) + 'px';
+    delBtn.style.top = (box.y - 45) + 'px';
+}

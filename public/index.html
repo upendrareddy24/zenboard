@@ -31,9 +31,14 @@
                 Design Name</label>
             <input type="text" id="design-name" value="Untitled Design"
                 style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); color: white; padding: 8px; border-radius: 8px; margin-top: 6px; outline: none;">
-            <button id="save-btn"
-                style="width: 100%; margin-top: 10px; padding: 10px; background: var(--accent-color); border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s;">Save
-                Design</button>
+
+            <div style="display: flex; gap: 8px; margin-top: 10px;">
+                <button id="save-btn"
+                    style="flex: 1; padding: 10px; background: var(--accent-color); border: none; color: white; border-radius: 8px; cursor: pointer; font-weight: bold; transition: opacity 0.2s;">Save</button>
+                <button id="new-board-btn"
+                    style="flex: 1.5; padding: 10px; background: rgba(255,255,255,0.1); border: 1px solid var(--border-color); color: white; border-radius: 8px; cursor: pointer; font-weight: bold; transition: all 0.2s;">+
+                    New Board</button>
+            </div>
         </div>
 
         <div style="margin-top: 30px;">

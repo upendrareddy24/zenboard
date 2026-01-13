@@ -55,6 +55,10 @@ io.on('connection', (socket) => {
         socket.emit('board_created', { id });
     });
 
+    socket.on('request_board_list', () => {
+        socket.emit('board_list', Object.keys(allBoards).map(id => ({ id, name: allBoards[id].name })));
+    });
+
     socket.on('draw_line', (data) => {
         allBoards[currentBoardId].elements.push({ type: 'line', ...data });
         socket.to(currentBoardId).emit('draw_line', data);
