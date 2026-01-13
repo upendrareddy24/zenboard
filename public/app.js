@@ -105,6 +105,24 @@ function setupEventListeners() {
             stage.container().style.cursor = 'default';
             stage.draggable(false);
         }
+        // Miro-style: Delete key to remove selected items
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            const nodes = transformer.nodes();
+            nodes.forEach(node => {
+                const id = node.id();
+                if (id) {
+                    socket.emit('delete_object', { id });
+                    deleteObject(id);
+                }
+            });
+        }
+    });
+
+    // Clear Board Action
+    document.getElementById('clear-canvas').addEventListener('click', () => {
+        if (confirm('Clear the entire board? This cannot be undone.')) {
+            socket.emit('clear_board');
+        }
     });
 
     // Draw Event Listeners
