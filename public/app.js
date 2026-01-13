@@ -190,8 +190,13 @@ function setupEventListeners() {
             });
             layer.add(lastShape);
         } else if (currentTool === 'text') {
-            createSticky(pos.x, pos.y);
+            const sticky = createSticky(pos.x, pos.y);
+            // Miro-style: Start typing instantly!
+            const txt = sticky.findOne('Text');
+            makeTextEditable(txt, sticky);
             isDrawing = false;
+        } else if (currentTool === 'rect' || currentTool === 'circle') {
+            // Let mousedown handle existing shapes for text entry
         }
     });
 
@@ -524,6 +529,7 @@ function createSticky(x, y, text = 'Type requirements...', skipEmit = false, exi
             userId
         });
     }
+    return group; // Return the group so we can start editing it
 }
 
 function updateTextPosition(shape, textNode) {
@@ -597,17 +603,21 @@ function makeTextEditable(textNode, anchorNode) {
     }
 
     textarea.addEventListener('keydown', (e) => {
-        if (e.keyCode === 13 && !e.shiftKey) {
-            removeTextarea();
-        }
+        // Multi-line support: only finish on Escape or clicking outside
         if (e.keyCode === 27) {
             removeTextarea();
         }
     });
 
-    textarea.addEventListener('blur', () => {
-        removeTextarea();
-    });
+    // Handle clicking outside to save
+    setTimeout(() => {
+        window.addEventListener('mousedown', function handleOutsideClick(e) {
+            if (e.target !== textarea) {
+                removeTextarea();
+                window.removeEventListener('mousedown', handleOutsideClick);
+            }
+        });
+    }, 0);
 }
 
 function updateRemoteCursor(data) {
