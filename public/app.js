@@ -194,7 +194,6 @@ function setupEventListeners() {
     });
 
     stage.on('mousemove touchmove', () => {
-        // Broadcast cursor position
         const pos = stage.getPointerPosition();
         socket.emit('mouse_move', {
             x: pos.x,
@@ -218,6 +217,95 @@ function setupEventListeners() {
             lastShape.radius(dist);
         }
         layer.batchDraw();
+    });
+
+    stage.on('mouseup touchend', () => {
+        if (isDrawing) {
+            isDrawing = false;
+            const objId = Math.random().toString(36).substring(7);
+
+            if (currentTool === 'pen') {
+                lastLine.id(objId);
+                socket.emit('draw_line', {
+                    id: objId,
+                    points: lastLine.points(),
+                    stroke: lastLine.stroke(),
+                    userId
+                });
+            } else if (lastShape) {
+                lastShape.id(objId);
+                socket.emit('new_shape', {
+                    id: objId,
+                    type: lastShape.className,
+                    x: lastShape.x(),
+                    y: lastShape.y(),
+                    width: lastShape.width(),
+                    height: lastShape.height(),
+                    radius: lastShape.radius ? lastShape.radius() : 0,
+                    fill: lastShape.fill(),
+                    stroke: lastShape.stroke()
+                });
+                lastShape = null;
+            }
+        }
+    });
+
+    // Double click to add/edit text on ANY shape
+    stage.on('dblclick dbltap', (e) => {
+        if (e.target === stage) return;
+        const node = e.target.parent() instanceof Konva.Group ? e.target.parent() : e.target;
+
+        if (node instanceof Konva.Rect || node instanceof Konva.Circle) {
+            let textNode = layer.findOne('#text-' + node.id());
+            if (!textNode) {
+                textNode = new Konva.Text({
+                    id: 'text-' + node.id(),
+                    text: 'Type...',
+                    fontSize: 14,
+                    fontFamily: 'Inter',
+                    fill: '#fff',
+                    align: 'center',
+                    verticalAlign: 'middle'
+                });
+                layer.add(textNode);
+                updateTextPosition(node, textNode);
+            }
+            makeTextEditable(textNode, node);
+        } else if (node instanceof Konva.Group) {
+            const txt = node.findOne('Text');
+            if (txt) makeTextEditable(txt, node);
+        }
+    });
+
+    // Sync scaling for Sticky Notes and Shapes
+    transformer.on('transform', (e) => {
+        const node = transformer.nodes()[0];
+        if (node instanceof Konva.Group) {
+            const rect = node.findOne('Rect');
+            const txt = node.findOne('Text');
+            const scaleX = node.scaleX();
+            const scaleY = node.scaleY();
+
+            rect.width(rect.width() * scaleX);
+            rect.height(rect.height() * scaleY);
+            txt.width(txt.width() * scaleX);
+            txt.height(txt.height() * scaleY);
+
+            node.scaleX(1);
+            node.scaleY(1);
+        }
+
+        const id = node.id();
+        socket.emit('update_transform', {
+            id: id,
+            x: node.x(),
+            y: node.y(),
+            scaleX: node.scaleX(),
+            scaleY: node.scaleY(),
+            width: node.width ? node.width() : 0,
+            height: node.height ? node.height() : 0,
+            rotation: node.rotation()
+        });
     });
 
     stage.on('mouseup touchend', () => {
@@ -362,13 +450,26 @@ function setupSocketListeners() {
     });
 
     socket.on('update_text', (data) => {
-        const group = stage.findOne('#' + data.id);
-        if (group) {
-            const txt = group.findOne('Text');
+        let node = stage.findOne('#' + data.id);
+        if (!node) node = stage.findOne('#text-' + data.id); // Check for shape labels
+
+        if (node) {
+            const txt = (node instanceof Konva.Text) ? node : node.findOne('Text');
             if (txt) {
                 txt.text(data.text);
                 layer.batchDraw();
             }
+        }
+    });
+
+    socket.on('update_transform', (data) => {
+        const node = stage.findOne('#' + data.id);
+        if (node) {
+            node.setAttrs(data);
+            // If it's a shape with a text label, update label position
+            const textLabel = layer.findOne('#text-' + data.id);
+            if (textLabel) updateTextPosition(node, textLabel);
+            layer.batchDraw();
         }
     });
 
@@ -423,7 +524,26 @@ function createSticky(x, y, text = 'Type requirements...', skipEmit = false, exi
     }
 }
 
-function makeTextEditable(textNode, group) {
+function updateTextPosition(shape, textNode) {
+    if (shape instanceof Konva.Rect) {
+        textNode.position({
+            x: shape.x(),
+            y: shape.y()
+        });
+        textNode.width(shape.width());
+        textNode.height(shape.height());
+    } else if (shape instanceof Konva.Circle) {
+        const radius = shape.radius();
+        textNode.position({
+            x: shape.x() - radius,
+            y: shape.y() - radius
+        });
+        textNode.width(radius * 2);
+        textNode.height(radius * 2);
+    }
+}
+
+function makeTextEditable(textNode, anchorNode) {
     // Hide text node while editing
     textNode.hide();
     transformer.nodes([]); // Clear transformer
@@ -432,8 +552,8 @@ function makeTextEditable(textNode, group) {
     // Create textarea over the canvas
     const stageBox = stage.container().getBoundingClientRect();
     const areaPosition = {
-        x: stageBox.left + group.x() * stage.scaleX() + stage.x(),
-        y: stageBox.top + group.y() * stage.scaleY() + stage.y()
+        x: stageBox.left + (anchorNode.x() + (anchorNode.offsetX ? anchorNode.offsetX() : 0)) * stage.scaleX() + stage.x(),
+        y: stageBox.top + (anchorNode.y() + (anchorNode.offsetY ? anchorNode.offsetY() : 0)) * stage.scaleY() + stage.y()
     };
 
     const textarea = document.createElement('textarea');
@@ -446,8 +566,9 @@ function makeTextEditable(textNode, group) {
     textarea.style.width = textNode.width() * stage.scaleX() + 'px';
     textarea.style.height = textNode.height() * stage.scaleY() + 'px';
     textarea.style.fontSize = textNode.fontSize() * stage.scaleX() + 'px';
+    textarea.style.textAlign = textNode.align();
     textarea.style.border = 'none';
-    textarea.style.padding = '15px';
+    textarea.style.padding = '10px';
     textarea.style.margin = '0px';
     textarea.style.overflow = 'hidden';
     textarea.style.background = 'transparent';
